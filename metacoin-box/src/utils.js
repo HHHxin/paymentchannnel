@@ -1,3 +1,5 @@
+const keccak256 = require('keccak256');
+const { MerkleTree } = require('merkletreejs')
 const Web3  = require('web3');
 const web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));
 
@@ -31,4 +33,42 @@ function signRawMessage(rawValue, privateKey) {
     return offchainSign(encodedMsg, privateKey)
 }
 
-module.exports = { paymentType, hexToBytes, offchainSign, signRawMessage};
+function signRawMessage2(length,rawValue, privateKey) {
+    let valueType = [];
+    for(let i = 0; i<length; i++){
+        valueType.push('address');
+        valueType.push('address');
+        valueType.push('uint256');
+        valueType.push('uint256');
+    }
+
+    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        valueType, rawValue
+    ).slice(2))
+
+    return offchainSign(encodedMsg, privateKey)
+}
+
+function signRawMessage3(rawVlaue, privateKey) {
+    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'bytes32'], rawVlaue,
+    ).slice(2));
+
+    return offchainSign(encodedMsg, privateKey);
+}
+
+function testMerkle() {
+
+    const leaves = [1, 2, 8, 4].map(keccak256).sort(Buffer.compare);
+    const tree = new MerkleTree(leaves, keccak256, { sort: true });
+    
+    const root = tree.getRoot();
+    const proofLeaves = [1, 2, 8, 4].map(keccak256).sort(Buffer.compare);
+    console.log(proofLeaves)
+    const proof = tree.getMultiProof(proofLeaves);
+    const proofFlags = tree.getProofFlags(proofLeaves, proof);
+
+}
+testMerkle()
+
+module.exports = { paymentType, hexToBytes, offchainSign, signRawMessage, signRawMessage2, signRawMessage3};
