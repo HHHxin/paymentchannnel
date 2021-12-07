@@ -1,6 +1,7 @@
 const MetaCoin = artifacts.require("MetaCoin");
-const MerkleMultiProof = artifacts.require('MerkleMultiProof')
-const {paymentType, hexToBytes, offchainSign, signRawMessage, signRawMessage2, signRawMessage3} = require('../src/utils')
+const MerkleMultiProof = artifacts.require('MerkleMultiProof');
+const MerkleProof = artifacts.require('MerkleProof');
+const { paymentType, hexToBytes, offchainSign, signRawMessage, signRawMessage2, signRawMessage3, verifySignature, verifySignature3,gasTestCost} = require('../src/utils')
 const { MerkleTree } = require('merkletreejs');
 const keccak256 = require('keccak256');
 
@@ -72,28 +73,49 @@ contract('MetaCoin', (accounts) => {
     assert.equal(await metaCoinInstance._allBalances(), 49, '资金存入异常2');
   });
 
+
+  it('test select leader', async () => {
+    const metaCoinInstance = await MetaCoin.deployed();
+    // assert.equal(await metaCoinInstance._leaderIndex(), 0, '初始化选举异常');
+
+    const tx = await metaCoinInstance.selectLeader();
+    const gasPrice = await web3.eth.getGasPrice();
+    const gasCost = tx.receipt.gasUsed * gasPrice
+    console.log(`选举消耗：${gasTestCost(gasCost)}`);
+
+  });
+
   it('should call a function (validPayment)', async () => {
-    const metaCoinInstance = await MetaCoin.deployed();;
+    const metaCoinInstance = await MetaCoin.deployed();
     
     let sig = signRawMessage([accounts[candidatesLength], accounts[candidatesLength+1], 2, 1], PrivateKeys[candidatesLength]);
     let payment = {from:accounts[candidatesLength], to:accounts[candidatesLength+1], amounts:2, nonce:1};
 
-    assert.equal(await metaCoinInstance.validPayment.call(payment, sig), true, '交易无效');
+    let flag = verifySignature([payment.from, payment.to, payment.amounts, payment.nonce], '0x'+sig.v.toString(16),sig.r,sig.s);
+    assert.equal(flag, true, '验证交易失败');
+    // assert.equal(await metaCoinInstance.validPayment.call(payment, sig), true, '交易无效');
   });
 
   it('should call a contract(MerkleTree)', async () => {
-    const contract = await MerkleMultiProof.new();
-    const leaves = ['a', 'b', 'd', 'q', 'o', 'f'].map(keccak256).sort(Buffer.compare);
-    const tree = new MerkleTree(leaves, keccak256, { sort: true });
-    
-    const root = tree.getRoot();
-    const proofLeaves = ['a', 'b', 'd', 'q', 'o', 'f'].map(keccak256).sort(Buffer.compare);
-    const proof = tree.getMultiProof(proofLeaves);
-    const proofFlags = tree.getProofFlags(proofLeaves, proof);
-    
-    const verified = await contract.verifyMultiProof.call(root, proofLeaves, proof, proofFlags);
+    const contract = await MerkleProof.new();
+    const metaCoinInstance = await MetaCoin.deployed();
+    const leaves = [12,165, 1531, 68795, 465].map(v => keccak256(v));
+    const tree = new MerkleTree(leaves, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const root = tree.getHexRoot();
 
-    assert.equal(verified, true, '验证无效');
+    let isGenRoot = await metaCoinInstance.isGeneratedRoot.call(leaves, root);
+    let tx = await metaCoinInstance.isGeneratedRoot(leaves, root);
+    let gasPrice = await web3.eth.getGasPrice();
+    let gasCost = tx.receipt.gasUsed * gasPrice;
+    
+
+    console.log(`genetated root的gas消耗：${tx.receipt.gasUsed}`);
+    console.log(`执行 generate root的价格: ${gasTestCost(gasCost)}`);
+    console.log(`生成的root哈希值：${isGenRoot.toString('hex')}`);
+    console.log(`root哈希值：${root.toString('hex')}`);
+    console.log(`生成的root是否正确：${isGenRoot}`)
+
+    
   });
 
   // 模拟链下验证一批交易签名并生成状态数组
@@ -116,44 +138,68 @@ contract('MetaCoin', (accounts) => {
       sigArr.push(signRawMessage([accounts[candidatesLength+i%paticipatesLength], accounts[candidatesLength+(i+1)%paticipatesLength], 1+i%2, i], PrivateKeys[candidatesLength+i%paticipatesLength]));
     }
 
+    // 链下验证所有交易
+    let flag = true;
+    for(let i = 0; i<arrLength; i++){
+      let from = await metaCoinInstance._participatesBook(paymentArr[i].from);
+      let to = await metaCoinInstance._participatesBook(paymentArr[i].to);
+      if(from == false || to == false ) { flag = false;break; }
+
+      let fromBalance = await metaCoinInstance._balancesOfParticipate(paymentArr[i].from);
+      if(fromBalance < paymentArr[i].amounts) { flag = false;break; }
+
+      if(!verifySignature([paymentArr[i].from, paymentArr[i].to, paymentArr[i].amounts, paymentArr[i].nonce], '0x'+sigArr[i].v.toString(16),sigArr[i].r,sigArr[i].s)){
+        flag = false;break; 
+      }
+    }
+    console.log(`链下验证交易：${flag}`);
+
     // let leaderSig = signRawMessage2(10,tempArr,PrivateKeys[0]);
 
-    assert.equal(await metaCoinInstance.validBatchOfPayment.call(paymentArr,sigArr), true, '验证这一批交易失败');
+    // 链上交易验证
+    // assert.equal(await metaCoinInstance.validBatchOfPayment.call(paymentArr,sigArr), true, '验证这一批交易失败');
 
-    // const tx = await metaCoinInstance.updatePayment(paymentArr,sigArr);
+    let tx = await metaCoinInstance.updatePayment(paymentArr,sigArr);
 
-    // const gasPrice = await web3.eth.getGasPrice()
-    // const gasUsed = tx.receipt.gasUsed
-    // const gasCost = gasUsed * gasPrice
-    // assert.equal(gasCost, 100,'testerror');
+    let gasPrice = await web3.eth.getGasPrice();
+    let gasUsed = tx.receipt.gasUsed;
+    let gasCost = gasUsed * gasPrice;
+    console.log(`updatePayment消耗：${gasTestCost(gasCost)}`);
 
   });
 
   it('leader生成状态数组与状态根,并上传验证', async () => {
     const metaCoinInstance = await MetaCoin.deployed();
     
-    // let sig = signRawMessage([accounts[0], accounts[1], 2, 1], PrivateKeys[0]); 
     let paymentArr = new Array();
-    // let tempArr = new Array();
     let sigArr = new Array();
     // 交易个数
     const arrLength = 10
     // 链下模拟一批交易
     for(let i = 0; i<arrLength; i++){
-      // tempArr.push(accounts[candidatesLength+i%10]);
-      // tempArr.push(accounts[candidatesLength+(i+1)%10]);
-      // tempArr.push(1+i%2);
-      // tempArr.push(i);
       paymentArr.push({from:accounts[candidatesLength+i%paticipatesLength], to:accounts[candidatesLength+(i+1)%paticipatesLength], amounts:1+i%2, nonce:i});
       sigArr.push(signRawMessage([accounts[candidatesLength+i%paticipatesLength], accounts[candidatesLength+(i+1)%paticipatesLength], 1+i%2, i], PrivateKeys[candidatesLength+i%paticipatesLength]));
     }
 
-    // let leaderSig = signRawMessage2(10,tempArr,PrivateKeys[0]);
+    // 链下验证所有交易
+    let flag = true;
+    for(let i = 0; i<arrLength; i++){
+      let from = await metaCoinInstance._participatesBook(paymentArr[i].from);
+      let to = await metaCoinInstance._participatesBook(paymentArr[i].to);
+      if(from == false || to == false ) { flag = false;break; }
 
-    assert.equal(await metaCoinInstance.validBatchOfPayment.call(paymentArr,sigArr), true, '验证这一批交易失败');
+      let fromBalance = await metaCoinInstance._balancesOfParticipate(paymentArr[i].from);
+      if(fromBalance < paymentArr[i].amounts) { flag = false;break; }
+
+      if(!verifySignature([paymentArr[i].from, paymentArr[i].to, paymentArr[i].amounts, paymentArr[i].nonce], '0x'+sigArr[i].v.toString(16),sigArr[i].r,sigArr[i].s)){
+        flag = false;break; 
+      }
+    }
+    console.log(`链下验证交易：${flag}`);
+    // 链上交易验证
+    // assert.equal(await metaCoinInstance.validBatchOfPayment.call(paymentArr,sigArr), true, '验证这一批交易失败');
 
     // 交易签名验证成功，leader生成状态数组与状态根
-
     let balancesOfParticipateMap = new Map();
     let from,to,amount;
     let tempAmount;
@@ -182,20 +228,11 @@ contract('MetaCoin', (accounts) => {
       stateArr.push(balancesOfParticipateMap.get(accounts[candidatesLength+i]));
     }
 
-    const leaves = [1, 2, 8, 4].map(keccak256).sort(Buffer.compare);
-    const tree = new MerkleTree(leaves, keccak256, { sort: true });
-    
-    const root = tree.getRoot();
-    const proofLeaves = [1, 2, 8, 4].map(keccak256).sort(Buffer.compare);
-    const proof = tree.getMultiProof(proofLeaves);
-    const proofFlags = tree.getProofFlags(proofLeaves, proof);
-    
-    const verified = await contract.verifyMultiProof.call(root, proofLeaves, proof, proofFlags);
-
+    const leaves = stateArr.map(v => keccak256(v));
+    const tree = new MerkleTree(leaves, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const root = tree.getHexRoot();
+    const verified = await metaCoinInstance.isGeneratedRoot.call(leaves, root);
     assert.equal(verified, true, 'root验证无效');
-
-
-
 
     // 收集到2f+1个投票(root的签名)
     let rootStateArr = new Array();
@@ -204,7 +241,7 @@ contract('MetaCoin', (accounts) => {
     let sig;
     let rootstate;
     for(let i = 0; i < sigLength; i++){
-      rootstate = {account:accounts[i], root:root}
+      rootstate = {account:accounts[i], root:root};
       sig = signRawMessage3([accounts[i], root], PrivateKeys[i]);
       
       assert.equal(await metaCoinInstance.validRoot.call(rootstate, sig), true, "签名无效");
@@ -216,10 +253,27 @@ contract('MetaCoin', (accounts) => {
     // 验证2f+1个投票（stateroot签名）
     assert.equal(await metaCoinInstance.validBatchOfRoot.call(rootStateArr, rootStateSigArr), true, "验证2f+1个状态根签名失败");
 
-    assert.equal(await metaCoinInstance.updateState.call(stateArr,rootStateArr, rootStateSigArr, root, proofLeaves, proof, proofFlags), true, '更新状态失败');
+    assert.equal(await metaCoinInstance.updateState.call(stateArr,leaves, rootStateArr, rootStateSigArr), true, '更新状态失败');
+
+    let tx = await metaCoinInstance.updateState(stateArr,leaves, rootStateArr, rootStateSigArr);
+
+    let gasPrice = await web3.eth.getGasPrice();
+    let gasUsed = tx.receipt.gasUsed;
+    let gasCost = gasUsed * gasPrice;
+    console.log(`updateState消耗价格：${gasTestCost(gasCost)}`);
+    console.log(`updateState消耗gas：${gasUsed}`);
   });
 
 
+  it('udpate后更换选举测试', async () => {
+    const metaCoinInstance = await MetaCoin.deployed();
+    console.log("select index: "+(await metaCoinInstance.selectLeader.call()));
+
+    const tx = await metaCoinInstance.selectLeader();
+    const gasPrice = await web3.eth.getGasPrice();
+    const gasCost = tx.receipt.gasUsed * gasPrice;
+    console.log(`update后选举消耗：${gasTestCost(gasCost)}`);
+  });
 
 
 });
