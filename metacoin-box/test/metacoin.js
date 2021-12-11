@@ -1,18 +1,31 @@
 const MetaCoin = artifacts.require("MetaCoin");
 const MerkleMultiProof = artifacts.require('MerkleMultiProof');
 const MerkleProof = artifacts.require('MerkleProof');
-const { paymentType, hexToBytes, offchainSign, signRawMessage, signRawMessage2, signRawMessage3, verifySignature, verifySignature3,gasTestCost} = require('../src/utils')
+const { paymentType, 
+  hexToBytes, 
+  offchainSign, 
+  signRawMessage, 
+  signRawMessage2, 
+  signRawMessage3, 
+  signRawMessage4, 
+  verifySignature, 
+  verifySignature3, 
+  verifySignature4, 
+  gasTestCost,
+  testHash
+} = require('../src/utils')
 const { MerkleTree } = require('merkletreejs');
 const keccak256 = require('keccak256');
 
 contract('MetaCoin', (accounts) => {
 
-  const candidatesLength = 13;
+  const candidatesLength = 14;
   const f=3;
   const paticipatesLength = 10;
+  const feeRate = 0.01;
 
   const C = [
-    4,5,6,4,5,6,4,5,6,4,5,6,4
+    200,200,200,200,200,200,200,200,200,200,200,200,200,200
   ]
 
   const PrivateKeys = [
@@ -57,7 +70,7 @@ contract('MetaCoin', (accounts) => {
       assert.equal(await metaCoinInstance._collateralOfValidator(await metaCoinInstance._validators(i)), C[i], '资金存入异常1');
     }
     
-    assert.equal(await metaCoinInstance._allCollateral(), 64, '资金存入异常2');
+    assert.equal(await metaCoinInstance._allCollateral(), 2800, '资金存入异常2');
   });
 
 
@@ -70,7 +83,7 @@ contract('MetaCoin', (accounts) => {
       assert.equal(await metaCoinInstance._balancesOfParticipate(await metaCoinInstance._participates(i)), C[i], '资金存入异常1');
     }
     
-    assert.equal(await metaCoinInstance._allBalances(), 49, '资金存入异常2');
+    assert.equal(await metaCoinInstance._allBalances(), 2000, '资金存入异常2');
   });
 
 
@@ -79,9 +92,9 @@ contract('MetaCoin', (accounts) => {
     // assert.equal(await metaCoinInstance._leaderIndex(), 0, '初始化选举异常');
 
     const tx = await metaCoinInstance.selectLeader();
-    const gasPrice = await web3.eth.getGasPrice();
-    const gasCost = tx.receipt.gasUsed * gasPrice
-    console.log(`选举消耗：${gasTestCost(gasCost)}`);
+    const gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    console.log(`选举消耗：${gasTestCost(gasUsed,gasPrice)}`);
 
   });
 
@@ -90,13 +103,43 @@ contract('MetaCoin', (accounts) => {
     
     let sig = signRawMessage([accounts[candidatesLength], accounts[candidatesLength+1], 2, 1], PrivateKeys[candidatesLength]);
     let payment = {from:accounts[candidatesLength], to:accounts[candidatesLength+1], amounts:2, nonce:1};
+    let paymentSig = {from:accounts[candidatesLength], to:accounts[candidatesLength+1], amounts:2, nonce:1, v:sig.v, r:sig.r, s:sig.s};
+    testHash([payment.from, payment.to, payment.amounts, payment.nonce, sig.v, sig.r, sig.s]);
+    let dataHash = await metaCoinInstance.testHash123.call(paymentSig);
+    console.log(`----------dataHash:${dataHash}`);
 
     let flag = verifySignature([payment.from, payment.to, payment.amounts, payment.nonce], '0x'+sig.v.toString(16),sig.r,sig.s);
     assert.equal(flag, true, '验证交易失败');
-    // assert.equal(await metaCoinInstance.validPayment.call(payment, sig), true, '交易无效');
+    assert.equal(await metaCoinInstance.validPayment.call(payment, sig), true, '交易无效');
   });
 
-  it('should call a contract(MerkleTree)', async () => {
+  it('should call a function (validSnapShot)', async () => {
+    const metaCoinInstance = await MetaCoin.deployed();
+
+    const leaves = [12,165, 1531, 68795, 465].map(v => keccak256(v));
+    const tree = new MerkleTree(leaves, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const stateroot = tree.getHexRoot();
+    
+    let temppaymentArr = [];
+    let temp;
+    for(let i = 0; i<10; i++){
+        temp = {from:accounts[i%paticipatesLength], to:accounts[(i+1)%paticipatesLength], amounts:1, nonce:i};
+        temppaymentArr.push(JSON.stringify(temp));
+    }
+    const leaves1 = temppaymentArr.map(v => keccak256(v));
+    const tree1 = new MerkleTree(leaves1, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const paymentroot = tree1.getHexRoot();
+
+    let sig = signRawMessage4([stateroot, paymentroot, 100, 100], PrivateKeys[0]);
+    let snapshot = {stateRoot:stateroot, paymentRoot:paymentroot, stateHeight: 100, totalFee:100};
+
+    let flag = verifySignature4(accounts[0], [snapshot.stateRoot, snapshot.paymentRoot, snapshot.stateHeight, snapshot.totalFee], '0x'+sig.v.toString(16),sig.r,sig.s);
+    
+    console.log(`链下验证Snapshot：${flag}`);
+    assert.equal(await metaCoinInstance.validSnapShot.call(snapshot, {account:accounts[0], sig:sig}), true, 'SnapShot无效');
+  });
+
+  it('should call a contract(MerkleProof)', async () => {
     const contract = await MerkleProof.new();
     const metaCoinInstance = await MetaCoin.deployed();
     const leaves = [12,165, 1531, 68795, 465].map(v => keccak256(v));
@@ -105,16 +148,14 @@ contract('MetaCoin', (accounts) => {
 
     let isGenRoot = await metaCoinInstance.isGeneratedRoot.call(leaves, root);
     let tx = await metaCoinInstance.isGeneratedRoot(leaves, root);
-    let gasPrice = await web3.eth.getGasPrice();
-    let gasCost = tx.receipt.gasUsed * gasPrice;
+    let gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    let gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
     
-
-    console.log(`genetated root的gas消耗：${tx.receipt.gasUsed}`);
-    console.log(`执行 generate root的价格: ${gasTestCost(gasCost)}`);
+    console.log(`genetated root的gas消耗：${gasUsed}`);
+    console.log(`执行 generate root的价格: ${gasTestCost(gasUsed,gasPrice)}`);
     console.log(`生成的root哈希值：${isGenRoot.toString('hex')}`);
     console.log(`root哈希值：${root.toString('hex')}`);
     console.log(`生成的root是否正确：${isGenRoot}`)
-
     
   });
 
@@ -161,24 +202,41 @@ contract('MetaCoin', (accounts) => {
 
     let tx = await metaCoinInstance.updatePayment(paymentArr,sigArr);
 
-    let gasPrice = await web3.eth.getGasPrice();
-    let gasUsed = tx.receipt.gasUsed;
-    let gasCost = gasUsed * gasPrice;
-    console.log(`updatePayment消耗：${gasTestCost(gasCost)}`);
+    let gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    let gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    console.log(`updatePayment消耗：${gasTestCost(gasUsed,gasPrice)}`);
 
   });
 
   it('leader生成状态数组与状态根,并上传验证', async () => {
     const metaCoinInstance = await MetaCoin.deployed();
     
+    let totalFee = 0;
     let paymentArr = new Array();
+    let temppaymentArr = new Array();
     let sigArr = new Array();
+    let encodedMsg;
+    let msgHex;
+    let msgHashHex;
     // 交易个数
-    const arrLength = 10
+    const arrLength = 28
     // 链下模拟一批交易
     for(let i = 0; i<arrLength; i++){
-      paymentArr.push({from:accounts[candidatesLength+i%paticipatesLength], to:accounts[candidatesLength+(i+1)%paticipatesLength], amounts:1+i%2, nonce:i});
-      sigArr.push(signRawMessage([accounts[candidatesLength+i%paticipatesLength], accounts[candidatesLength+(i+1)%paticipatesLength], 1+i%2, i], PrivateKeys[candidatesLength+i%paticipatesLength]));
+      tempPayment = {from:accounts[candidatesLength+i%paticipatesLength], to:accounts[candidatesLength+(i+1)%paticipatesLength], amounts:100*(1+feeRate), nonce:i}
+      paymentArr.push(tempPayment);      
+      paymentSig = signRawMessage([accounts[candidatesLength+i%paticipatesLength], accounts[candidatesLength+(i+1)%paticipatesLength], 100*(1+feeRate), i], PrivateKeys[candidatesLength+i%paticipatesLength]);
+      sigArr.push(paymentSig);
+      tempPayment['sig'] = paymentSig;
+
+      encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'address', 'uint256', 'uint256', 'uint8', 'bytes32', 'bytes32'],
+        [accounts[candidatesLength+i%paticipatesLength], accounts[candidatesLength+(i+1)%paticipatesLength], 100*(1+feeRate), i, paymentSig.v, paymentSig.r, paymentSig.s]
+      ).slice(2));
+      msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
+      msgHashHex = web3.utils.keccak256('0x' + msgHex);
+      temppaymentArr.push(msgHashHex);
+
+      totalFee += 100 * feeRate;
     }
 
     // 链下验证所有交易
@@ -222,7 +280,6 @@ contract('MetaCoin', (accounts) => {
     }
 
     // 由状态Map生成state root
-    const contract = await MerkleMultiProof.new();
     let stateArr = [];
     for(let i = 0; i < paticipatesLength; i++){
       stateArr.push(balancesOfParticipateMap.get(accounts[candidatesLength+i]));
@@ -234,46 +291,114 @@ contract('MetaCoin', (accounts) => {
     const verified = await metaCoinInstance.isGeneratedRoot.call(leaves, root);
     assert.equal(verified, true, 'root验证无效');
 
-    // 收集到2f+1个投票(root的签名)
-    let rootStateArr = new Array();
+    const leaves1 = temppaymentArr.map(v => keccak256(v));
+    const tree1 = new MerkleTree(leaves1, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const paymentroot = tree1.getHexRoot();
+
+    // 收集到2f+1个投票(root的签名,没有leader)
     let rootStateSigArr = new Array();
     let sigLength = 2*f + 1;
     let sig;
-    let rootstate;
-    for(let i = 0; i < sigLength; i++){
-      rootstate = {account:accounts[i], root:root};
-      sig = signRawMessage3([accounts[i], root], PrivateKeys[i]);
+    let rootstate = {stateRoot:root, paymentRoot:paymentroot, stateHeight:arrLength, totalFee:totalFee};
+    for(let i = 1; i <= sigLength; i++){    
+      sig = signRawMessage4([root, paymentroot, arrLength, totalFee], PrivateKeys[i]);
       
-      assert.equal(await metaCoinInstance.validRoot.call(rootstate, sig), true, "签名无效");
-
-      rootStateArr.push(rootstate);
-      rootStateSigArr.push(sig);
+      assert.equal(await metaCoinInstance.validSnapShot.call(rootstate, {account:accounts[i], sig:sig}), true, "签名无效");
+      
+      rootStateSigArr.push({account: accounts[i], sig: sig});
     }
 
     // 验证2f+1个投票（stateroot签名）
-    assert.equal(await metaCoinInstance.validBatchOfRoot.call(rootStateArr, rootStateSigArr), true, "验证2f+1个状态根签名失败");
+    assert.equal(await metaCoinInstance.validBatchOfSnapShot.call(rootstate, rootStateSigArr), true, "验证2f+1个snapshot签名失败");
+    assert.equal(await metaCoinInstance.updateState.call(stateArr,leaves, rootstate, rootStateSigArr), true, '更新状态失败');
+    let tx = await metaCoinInstance.updateState(stateArr,leaves, rootstate, rootStateSigArr);
 
-    assert.equal(await metaCoinInstance.updateState.call(stateArr,leaves, rootStateArr, rootStateSigArr), true, '更新状态失败');
+    let gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    console.log(`updateState消耗gasPrice：${gasPrice}`);
+    let gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    let localGasCostWei = gasUsed.mul(gasPrice)
+    let localGasCostETH = web3.utils.fromWei(localGasCostWei, 'ether')
+    // let gasCost = gasUsed * gasPrice;
+    console.log(`updateState消耗价格：${gasTestCost(gasUsed,gasPrice)}`);
+    console.log(`updateState消耗gasUsed：${gasUsed}`);
+    console.log(`updateState消耗ETH:${localGasCostETH}`);
 
-    let tx = await metaCoinInstance.updateState(stateArr,leaves, rootStateArr, rootStateSigArr);
+    // for(let i = 0; i<candidatesLength; i++){
+    //   tempFeeOfValidator = await metaCoinInstance._feeOfValidator(await metaCoinInstance._validators(i));
+    //   console.log(`第${i}个验证者的Fee:${tempFeeOfValidator}`);
+    // }
 
-    let gasPrice = await web3.eth.getGasPrice();
-    let gasUsed = tx.receipt.gasUsed;
-    let gasCost = gasUsed * gasPrice;
-    console.log(`updateState消耗价格：${gasTestCost(gasCost)}`);
-    console.log(`updateState消耗gas：${gasUsed}`);
   });
-
 
   it('udpate后更换选举测试', async () => {
     const metaCoinInstance = await MetaCoin.deployed();
     console.log("select index: "+(await metaCoinInstance.selectLeader.call()));
 
     const tx = await metaCoinInstance.selectLeader();
-    const gasPrice = await web3.eth.getGasPrice();
-    const gasCost = tx.receipt.gasUsed * gasPrice;
-    console.log(`update后选举消耗：${gasTestCost(gasCost)}`);
+    const gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    console.log(`update后选举消耗：${gasTestCost(gasUsed,gasPrice)}`);
   });
+
+  it('txFraudProof测试', async () => {
+    const metaCoinInstance = await MetaCoin.deployed();
+    
+    let totalFee = 0;
+    let temppaymentArr = new Array();
+    let encodedMsg;
+    let msgHex;
+    let msgHashHex;
+    // 交易个数
+    const arrLength = 28
+    // 链下模拟一批交易
+    for(let i = 0; i<arrLength; i++){
+      tempPayment = {from:accounts[candidatesLength+i%paticipatesLength], to:accounts[candidatesLength+(i+1)%paticipatesLength], amounts:100*(1+feeRate), nonce:i} 
+      paymentSig = signRawMessage([tempPayment.from, tempPayment.to, tempPayment.amounts, tempPayment.nonce], PrivateKeys[candidatesLength+i%paticipatesLength]);
+
+      encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'address', 'uint256', 'uint256', 'uint8', 'bytes32', 'bytes32'],
+        [tempPayment.from, tempPayment.to, tempPayment.amounts, tempPayment.nonce, paymentSig.v, paymentSig.r, paymentSig.s]
+      ).slice(2));
+      msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
+      msgHashHex = web3.utils.keccak256('0x' + msgHex);
+      temppaymentArr.push(msgHashHex);
+
+      totalFee += 100 * feeRate;
+    }
+
+    // 生成错误交易
+    errorPayment = {from:accounts[candidatesLength+arrLength%paticipatesLength], to:accounts[candidatesLength+(arrLength+1)%paticipatesLength], amounts:100*(1+feeRate), nonce:arrLength}
+    errorPaymentSig = signRawMessage([errorPayment.from, errorPayment.to, errorPayment.amounts, errorPayment.nonce], PrivateKeys[candidatesLength+(arrLength-1)%paticipatesLength])
+    errorPaymentAndSig = {from:errorPayment.from, to:errorPayment.to, amounts:errorPayment.amounts, nonce:errorPayment.nonce, v: errorPaymentSig.v, r: errorPaymentSig.r, s: errorPaymentSig.s}
+    errorEncodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+      ['address', 'address', 'uint256', 'uint256', 'uint8', 'bytes32', 'bytes32'],
+      [errorPayment.from, errorPayment.to, errorPayment.amounts, errorPayment.nonce, errorPaymentSig.v, errorPaymentSig.r, errorPaymentSig.s]
+    ).slice(2));
+    errorMsgHex = Buffer.from(errorEncodedMsg, 'latin1').toString('hex');
+    errorMsgHashHex = web3.utils.keccak256('0x' + errorMsgHex);
+    temppaymentArr.push(errorMsgHashHex);
+
+    totalFee += 100 * feeRate;
+
+    // 生成包含错误交易的paymentroot
+    const leaves1 = temppaymentArr.map(v => keccak256(v));
+    const tree1 = new MerkleTree(leaves1, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const paymentroot = tree1.getHexRoot();
+    const leaf = keccak256(errorMsgHashHex).toString('hex');
+    const proof = tree1.getHexProof(leaf);
+
+    let leader = String(await metaCoinInstance._leader());
+    let leaderIndex = Number(await metaCoinInstance._leaderIndex());
+    console.log(`-----:${leader}`);
+    console.log(`----index:${leaderIndex}`);
+    // leader对包含错误交易的paymentRoot签名
+    rootSig = signRawMessage3([paymentroot], PrivateKeys[leaderIndex]);
+    // console.log("验证签名："+verifySignature3([leader, paymentroot],'0x'+rootSig.v.toString(16), rootSig.r, rootSig.s));
+
+    let flag = await metaCoinInstance.TxFraudProof.call(paymentroot, proof,rootSig,errorPaymentAndSig);
+    console.log(`txFraudProof验证结果：${flag}`);
+  });
+
 
 
 });

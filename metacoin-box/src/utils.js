@@ -113,7 +113,7 @@ function signRawMessage2(length,rawValue, privateKey) {
 
 function signRawMessage3(rawValue, privateKey) {
     const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
-        ['address', 'bytes32'], rawValue,
+        ['bytes32'], rawValue,
     ).slice(2));
 
     return offchainSign(encodedMsg, privateKey);
@@ -121,13 +121,56 @@ function signRawMessage3(rawValue, privateKey) {
 
 function verifySignature3(rawValue, v,r,s) {
     const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
-        ['address', 'bytes32'], rawValue
+        ['address','bytes32'], rawValue
     ).slice(2));
     const msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
     const msgHashHex = web3.utils.keccak256('0x' + msgHex);
 
     const tempAccount = web3.eth.accounts.recover(msgHashHex, v,r,s);
     return tempAccount == rawValue[0];
+}
+
+function signRawMessage4(rawValue, privateKey) {
+    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['bytes32', 'bytes32', 'uint256', 'uint256'], rawValue,
+    ).slice(2));
+
+    return offchainSign(encodedMsg, privateKey);
+}
+
+function verifySignature4(account,rawValue, v,r,s) {
+    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['bytes32', 'bytes32', 'uint256', 'uint256'], rawValue
+    ).slice(2));
+    const msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
+    const msgHashHex = web3.utils.keccak256('0x' + msgHex);
+
+    const tempAccount = web3.eth.accounts.recover(msgHashHex, v,r,s);
+    return tempAccount == account;
+}
+
+function testSnapshot() {
+    const leaves = [12,165, 1531, 68795, 465].map(v => keccak256(v));
+    const tree = new MerkleTree(leaves, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const stateroot = tree.getHexRoot();
+
+    let temppaymentArr = [];
+    let temp;
+    for(let i = 0; i<10; i++){
+        temp = {from:accounts[i%paticipatesLength], to:accounts[(i+1)%paticipatesLength], amounts:1, nonce:i};
+        temppaymentArr.push(JSON.stringify(temp));
+    }
+
+    const leaves1 = temppaymentArr.map(v => keccak256(v));
+    const tree1 = new MerkleTree(leaves1, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const paymentroot = tree1.getHexRoot();
+
+    let sig = signRawMessage4([accounts[0], stateroot, paymentroot, 100, 100], PrivateKeys[0]);
+    let snapshot = {account:accounts[0], stateRoot:stateroot, paymentRoot:paymentroot, stateHeight: 100, totalFee: 100};
+
+    let flag = verifySignature4([snapshot.account, snapshot.stateRoot, snapshot.paymentRoot, snapshot.stateHeight, snapshot.totalFee], '0x'+sig.v.toString(16),sig.r,sig.s);
+    
+    console.log("snapshot验证："+flag);
 }
 
 // let root,rootSig;
@@ -308,8 +351,34 @@ function testRandom() {
     }
 }
 
-function gasTestCost(gas) {
-    return gas/(10**18)*25000;
+function gasTestCost(gasUsed,gasPrice) {
+    let localGasCostWei = gasUsed.mul(gasPrice);
+    let localGasCostETH = web3.utils.fromWei(localGasCostWei, 'ether');
+    return localGasCostETH * 25000;
 }
 
-module.exports = { paymentType, hexToBytes, offchainSign, signRawMessage, signRawMessage2, signRawMessage3, verifySignature, verifySignature3,gasTestCost};
+
+function testHash(rawValue) {
+    
+    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'address', 'uint256', 'uint256', 'uint8', 'bytes32', 'bytes32'], rawValue
+    ).slice(2));
+
+    const msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
+    const msgHashHex = web3.utils.keccak256('0x' + msgHex);
+    console.log(`----------链下生成的hash:${keccak256(msgHashHex).toString('hex')}`);
+}
+
+module.exports = { paymentType, 
+    hexToBytes, 
+    offchainSign, 
+    signRawMessage, 
+    signRawMessage2, 
+    signRawMessage3, 
+    signRawMessage4, 
+    verifySignature, 
+    verifySignature3,
+    verifySignature4,
+    gasTestCost,
+    testHash
+};
