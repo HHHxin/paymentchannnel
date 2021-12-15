@@ -357,18 +357,6 @@ function gasTestCost(gasUsed,gasPrice) {
     return localGasCostETH * 25000;
 }
 
-
-function testHash(rawValue) {
-    
-    const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
-        ['address', 'address', 'uint256', 'uint256', 'uint8', 'bytes32', 'bytes32'], rawValue
-    ).slice(2));
-
-    const msgHex = Buffer.from(encodedMsg, 'latin1').toString('hex');
-    const msgHashHex = web3.utils.keccak256('0x' + msgHex);
-    console.log(`----------链下生成的hash:${keccak256(msgHashHex).toString('hex')}`);
-}
-
 module.exports = { paymentType, 
     hexToBytes, 
     offchainSign, 
@@ -379,6 +367,5 @@ module.exports = { paymentType,
     verifySignature, 
     verifySignature3,
     verifySignature4,
-    gasTestCost,
-    testHash
+    gasTestCost
 };

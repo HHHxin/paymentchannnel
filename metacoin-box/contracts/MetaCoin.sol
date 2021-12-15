@@ -2,9 +2,9 @@
 pragma solidity >=0.8.10;
 pragma experimental ABIEncoderV2;
 
-import "./ConvertLib.sol";
-import "./MerkleMultiProof.sol";
-import "./MerkleProof.sol";
+// import "./ConvertLib.sol";
+// import "./MerkleMultiProof.sol";
+// import "./MerkleProof.sol";
 
 contract MetaCoin {
 	enum Phase {
@@ -78,6 +78,13 @@ contract MetaCoin {
 	bytes32 public _currentRoot;
 	bytes32 public _currentPaymentRoot;
 
+	uint256 public _rejectBook;
+
+	uint256 public _T;
+
+	uint256 public _expiration;
+	uint256 public _duration;
+
 	modifier atPhase(Phase phase) {
         require(_phase == phase, 'Invalid phase');
         _;
@@ -85,9 +92,8 @@ contract MetaCoin {
 
 	constructor() {
 		_phase = Phase.Open;
-
-		_allCollateral = 0;
-		_allBalances = 0;
+		_T = 7;
+		_duration = 1 hours;
 	}
 
 	function candidateFund() public payable atPhase(Phase.Open) {
@@ -113,6 +119,8 @@ contract MetaCoin {
 		if(_participates.length == 10){
 			_phase = Phase.Exchange;
 		}
+
+		_expiration  = block.timestamp + _duration;
 	}
 
     function checkPrefixedSig(address pk, bytes32 message, ECSignature memory sig)
@@ -135,7 +143,7 @@ contract MetaCoin {
 
 	// function validBatchOfRoot(RootState[] calldata stateRootArr, ECSignature[] calldata sigArr)
     // public view returns(bool) {
-	// 	if(stateRootArr.length != 7 && sigArr.length != 7) return false;
+	// 	if(stateRootArr.length != _T && sigArr.length != _T) return false;
 		
 	// 	for(uint i = 0; i<stateRootArr.length; i++){
 	// 		if(validRoot(stateRootArr[i],sigArr[i]) == false) return false;
@@ -149,6 +157,7 @@ contract MetaCoin {
 		require(isGeneratedRoot(leaves, snapshot.stateRoot) == true);
 		//2 验证对root的t个签名
 		// if(!validBatchOfSnapShot(snapshot, sigOfAccount)) return false;
+		require(sigOfAccount.length >= _T);
 		bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encode(snapshot))));
 		for(uint i = 0; i<sigOfAccount.length; i++){
         	// if(ecrecover(prefixedHash, sigOfAccount[i].sig.v, sigOfAccount[i].sig.r, sigOfAccount[i].sig.s) != sigOfAccount[i].account){
@@ -164,13 +173,32 @@ contract MetaCoin {
 			_balancesOfParticipate[_participates[i]] = balancesArr[i];
 		}
 
-		// 4 Leader与验证者分配交易fee
-		_feeOfValidator[_leader] += snapshot.totalFee / 2;
+		// 惩罚投reject票的验证者
+		uint allPenaltiesCollateral;
+		uint allPenaltiesFee;
+		uint alvPenalitiesCollateral = allPenaltiesCollateral / sigOfAccount.length;
+		uint alvPenalitiesFee = allPenaltiesFee / sigOfAccount.length;
+		address payable tempValidators;
+		for(uint i = 0; i< _validators.length; i++){
+			if(readRejectBook(i)==1){
+				tempValidators = _validators[i];
+				allPenaltiesCollateral += _collateralOfValidator[tempValidators];
+				allPenaltiesFee += _feeOfValidator[tempValidators];
+			}
+		}
+
+		// Leader与验证者分配交易fee
 		uint validatorFee = snapshot.totalFee  - snapshot.totalFee / 2;
 		uint alvOfFee = validatorFee / sigOfAccount.length;
+		_feeOfValidator[_leader] += snapshot.totalFee / 2 + (validatorFee - alvOfFee * sigOfAccount.length);
 		for(uint i = 0; i < sigOfAccount.length; i++){
-			_feeOfValidator[sigOfAccount[i].account] += alvOfFee;
+			_feeOfValidator[sigOfAccount[i].account] += alvOfFee + alvPenalitiesFee;
+			_collateralOfValidator[sigOfAccount[i].account] += alvPenalitiesCollateral;
 		}
+
+		_rejectBook = 0;
+		_expiration  = block.timestamp + _duration;
+
 		return true;
 	}
 
@@ -208,33 +236,33 @@ contract MetaCoin {
         return false;
     }
 
-	function validBatchOfPayment(Payment[] calldata paymentArr, ECSignature[] calldata sigArr)
-	public view returns(bool) {
-		for(uint i = 0; i<paymentArr.length; i++){
-			if(validPayment(paymentArr[i],sigArr[i]) == false){
-				return false;
-			}
-		}
-		return true;
-	}
+	// function validBatchOfPayment(Payment[] calldata paymentArr, ECSignature[] calldata sigArr)
+	// public view returns(bool) {
+	// 	for(uint i = 0; i<paymentArr.length; i++){
+	// 		if(validPayment(paymentArr[i],sigArr[i]) == false){
+	// 			return false;
+	// 		}
+	// 	}
+	// 	return true;
+	// }
 
-	// 把交易上传到链上进行验证，并转移状态
-	function updatePayment(Payment[] calldata paymentArr, ECSignature[] calldata sigArr)
-	public atPhase(Phase.Exchange) returns(bool){
-		for(uint i = 0; i<paymentArr.length; i++){
-			if(validPayment(paymentArr[i],sigArr[i]) == false){
-				return false;
-			}
-		}
+	// // 把交易上传到链上进行验证，并转移状态
+	// function updatePayment(Payment[] calldata paymentArr, ECSignature[] calldata sigArr)
+	// public atPhase(Phase.Exchange) returns(bool){
+	// 	for(uint i = 0; i<paymentArr.length; i++){
+	// 		if(validPayment(paymentArr[i],sigArr[i]) == false){
+	// 			return false;
+	// 		}
+	// 	}
 
-		for(uint i = 0; i<paymentArr.length; i++){
-			_balancesOfParticipate[paymentArr[i].from] -= paymentArr[i].amounts;
-			_balancesOfParticipate[paymentArr[i].to] += paymentArr[i].amounts;
-		}
+	// 	for(uint i = 0; i<paymentArr.length; i++){
+	// 		_balancesOfParticipate[paymentArr[i].from] -= paymentArr[i].amounts;
+	// 		_balancesOfParticipate[paymentArr[i].to] += paymentArr[i].amounts;
+	// 	}
 
-		_phase = Phase.Update;
-		return true;
-	}
+	// 	_phase = Phase.Update;
+	// 	return true;
+	// }
 
 	function selectLeader() public returns(uint256 leaderIndex){
 		if(_currentRoot == 0x0){
@@ -242,8 +270,9 @@ contract MetaCoin {
 		}
 
 		uint256 allFee= 0;
-		uint256[] memory tempVector = new uint256[](_validators.length);
-		for(uint i = 0; i < _validators.length; i++){
+		uint256 validatorsLength = _validators.length;
+		uint256[] memory tempVector = new uint256[](validatorsLength);
+		for(uint i = 0; i < validatorsLength; i++){
 			if(i != _leaderIndex){
 				allFee += _feeOfValidator[_validators[i]];
 				tempVector[i] = allFee;
@@ -252,7 +281,7 @@ contract MetaCoin {
 			}
 		}
 
-		uint256 random = uint256(keccak256(abi.encode(_currentRoot))) % allFee;
+		uint256 random = uint256(keccak256(abi.encode(_currentRoot, block.timestamp))) % allFee;
 		for(uint i = 0; i < tempVector.length; i++){
 			if(random <= tempVector[i]){
 				return i;
@@ -308,6 +337,8 @@ contract MetaCoin {
 	}
 	
 	function TxFraudProof(bytes32 root, bytes32[] calldata proof, ECSignature calldata rootSig, PaymentSig calldata paymentSig) public returns(bool){
+		require(_validatorsBook[msg.sender] == true);
+
 		// 1, 验证是否是leader签署的root
 		if(!validRoot(root,SigOfAccount({account: _leader,sig: rootSig}))) return false;
 		// 2. 验证交易签名是否错误
@@ -319,39 +350,101 @@ contract MetaCoin {
 		// 3. 验证错误交易是否存在merkle tree 中
 		if(!verify(root, leaf, proof)) return false;
 
+		// 4. 抵押物和FEE分给挑战者
+		_collateralOfValidator[msg.sender] += _collateralOfValidator[_leader];
+		_feeOfValidator[msg.sender] += _feeOfValidator[_leader];
+		_collateralOfValidator[_leader] = 0;
+		_feeOfValidator[_leader] = 0;
+
+		// 5. 重新选举
+		_expiration  = block.timestamp + _duration;
+		_rejectBook = 0;
+		_leaderIndex = selectLeader();
+		_leader = _validators[_leaderIndex];
+
 		return true;
 	}
 
-	function testHash123(PaymentSig memory paymentSig) pure public returns(bytes32) {
-		bytes32 prefixedHash = keccak256(abi.encode(paymentSig));
-		bytes32 leaf = keccak256(abi.encode(prefixedHash));
-		// bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encode(payment))));
-		return leaf;
+	function writeRejectBook(uint256 id)public returns(bool) {
+		if(countRejectBook()>=_T) return true;
+		require(_validatorsBook[msg.sender] == true);
+		require(_validators[id] == msg.sender);
+
+		uint temp = 1<<id;
+		_rejectBook = _rejectBook|temp;
+
+		//到达2f+1个验证者投票
+		if (countRejectBook() == _T){
+			return true;
+		}else{
+			return false;
+		}
+			
+	}
+	
+	function readRejectBook(uint256 id)public view returns(uint256) {
+		return (_rejectBook >> id)&1;
 	}
 
-	// function setRejectBook(uint256 id)public returns(bool) {
-	// 	uint temp = 1<<id;
-	// 	rejectBook =rejectBook|temp;
-	// 	if (countRejectBook() >=4)
-	// 		return true;
-	// 	else
-	// 		return false;
-	
-	// }
-	
-	// function readRejectBook(uint256 id)public returns(uint256) {
-	// 	return (rejectBook >>id)&1;
-	// }
+	function countRejectBook()public view returns(uint256) {
+		uint temmp = _rejectBook;
+		uint count;
+		while (temmp !=0){			
+			temmp &= temmp -1;
+			count++;
+		}
+		return count;
+	}
 
-	// function countRejectBook()public returns(uint256) {
-	// 	uint temmp = rejectBook;
-	// 	uint count;
-	// 	while (temmp !=0){
-			
-	// 		temmp &= temmp -1;
-	// 		count++;
-	// 	}
-	// 	return count;
-	// }
+	// 惩罚投正确票的验证者
+	function punishErrorVoter(SnapShot calldata snapshot, SigOfAccount[] calldata sigOfAccount) public {
+		require(_validatorsBook[msg.sender] == true, "not a validator");
+		require(countRejectBook() >= _T);
+		// 把leader的FEE与抵押物分给投reject票的验证者
+		uint256 punishCollateral = _collateralOfValidator[_leader];
+		uint256 punishFee = _feeOfValidator[_leader];
+		_collateralOfValidator[_leader] = 0;
+		_feeOfValidator[_leader] = 0;
 
+		address tempAccount;
+		bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encode(snapshot))));
+		for(uint i = 0; i<sigOfAccount.length; i++){
+			// 把投正确票验证者的FEE与抵押物分给投reject票的验证者
+			tempAccount = sigOfAccount[i].account;
+			if(ecrecover(prefixedHash, sigOfAccount[i].sig.v, sigOfAccount[i].sig.r, sigOfAccount[i].sig.s) == tempAccount){
+				punishCollateral += _collateralOfValidator[tempAccount];
+				punishFee += _feeOfValidator[tempAccount];
+				_collateralOfValidator[tempAccount] = 0;
+				_feeOfValidator[tempAccount] = 0;
+			}
+		}
+
+		uint256 alvCollateral = punishCollateral / _T;
+		uint256 alvFee = punishFee / _T;
+		for(uint i = 0; i < _validators.length; i++){
+			if (readRejectBook(i) == 1){
+				_collateralOfValidator[_validators[i]] += alvCollateral;
+				_feeOfValidator[_validators[i]] += alvFee;
+			}
+		}
+
+		_feeOfValidator[msg.sender] += punishFee - _T * alvFee;
+		_collateralOfValidator[msg.sender] += punishCollateral - _T * alvCollateral;
+
+		_rejectBook = 0;
+		_expiration  = block.timestamp + _duration;
+		_leaderIndex = selectLeader();
+		_leader = _validators[_leaderIndex];
+	}
+
+	// 触发重新进行选举
+	function triggerSelectLeader() public{
+		require(_validatorsBook[msg.sender] == true, "not a validator");
+		require(block.timestamp >= _expiration, "error timeout");
+
+		_rejectBook = 0;
+		_expiration  = block.timestamp + _duration;
+		_leaderIndex = selectLeader();
+		_leader = _validators[_leaderIndex];
+	}
 }
