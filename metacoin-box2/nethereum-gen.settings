@@ -1,0 +1,7 @@
+{
+    "projectName": "MetacoinBox",
+    "namespace": "MetacoinBox.Contracts",
+    "lang": 0,
+    "autoCodeGen": true,
+    "projectPath": "../"
+}
