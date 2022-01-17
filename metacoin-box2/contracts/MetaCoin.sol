@@ -4,7 +4,7 @@ pragma experimental ABIEncoderV2;
 
 contract MetaCoin {
 	enum Phase {
-		Open,Join,Update,Exchange,Close,Cancelled
+		Open,Join,Update,Exchange,Close
 	}
 
 	enum ChallengesPhase {
@@ -49,7 +49,7 @@ contract MetaCoin {
 		bytes32 stateRoot1;
 		bytes32 stateRoot2;
 		bytes32[] stateRootProof;
-		bytes32[]proof1;
+		bytes32[] proof1;
 		bytes32[] proof2;
 		Payment tx;
 		State state1;
@@ -386,4 +386,31 @@ contract MetaCoin {
 		return count;
 	}
 
+	function ClosePC() public {
+		require(msg.sender == _leader);
+		
+		_phase = Phase.Close;
+	}
+
+	function withdrawValidatorsCollateral(uint256 index) public payable atPhase(Phase.Close) {
+		address payable tempAddress = _validators[index];
+		require(msg.sender == tempAddress);
+		require(_validatorsBook[tempAddress]);
+
+		_validatorsBook[tempAddress] = false;
+		tempAddress.transfer(_collateralOfValidator[tempAddress]);
+	}
+
+	function withdrawParticipateBalance(uint256 index, uint256 particiapteBalances, bytes32[] calldata proof) public payable atPhase(Phase.Close) {
+		address payable tempAddress = _participates[index];
+		require(msg.sender == tempAddress);
+		require(_participatesBook[tempAddress]);
+		// valid stateRoot leaf
+
+		bytes32 leaf = keccak256(abi.encode(State({account:tempAddress, balances:particiapteBalances})));
+		require(verify(_latesCheckPoint.stateRoot, leaf, proof));
+
+		_participatesBook[tempAddress] = false;
+		tempAddress.transfer(particiapteBalances);
+	}
 }
