@@ -62,6 +62,7 @@ contract MetaCoin {
 		bytes32 stateRoot;
 		bytes32 paymentRoot;
 		bytes32 intervalStateRoot;
+		bytes32 withdrawRoot;
 		uint256 totalFee;
 	}
 
@@ -95,9 +96,9 @@ contract MetaCoin {
         _;
     }
 
-	constructor() {
-		_phase = Phase.Open;
-	}
+	// constructor() {
+	// 	_phase = Phase.Open;
+	// }
 
 	function candidateFund() public payable atPhase(Phase.Open) {
 		_validators.push(payable(msg.sender));
@@ -386,13 +387,27 @@ contract MetaCoin {
 		return count;
 	}
 
+	function withdrawBalances(uint256 index,uint256 balances, bytes32[] calldata proof) public {
+		address payable tempAddress = _participates[index];
+		require(msg.sender == tempAddress);
+		require(_participatesBook[tempAddress]);
+		// valid withdrawRoot leaf
+
+		bytes32 leaf = keccak256(abi.encode(State({account:tempAddress, balances:balances})));
+		require(verify(_latesCheckPoint.withdrawRoot, leaf, proof));
+
+		_participatesBook[tempAddress] = false;
+		tempAddress.transfer(balances);
+		_allBalances -= balances;
+	}
+
 	function ClosePC() public {
 		require(msg.sender == _leader);
-		
+
 		_phase = Phase.Close;
 	}
 
-	function withdrawValidatorsCollateral(uint256 index) public payable atPhase(Phase.Close) {
+	function closeValidatorsCollateral(uint256 index) public payable atPhase(Phase.Close) {
 		address payable tempAddress = _validators[index];
 		require(msg.sender == tempAddress);
 		require(_validatorsBook[tempAddress]);
@@ -401,7 +416,7 @@ contract MetaCoin {
 		tempAddress.transfer(_collateralOfValidator[tempAddress]);
 	}
 
-	function withdrawParticipateBalance(uint256 index, uint256 particiapteBalances, bytes32[] calldata proof) public payable atPhase(Phase.Close) {
+	function closeParticipateBalance(uint256 index, uint256 particiapteBalances, bytes32[] calldata proof) public payable atPhase(Phase.Close) {
 		address payable tempAddress = _participates[index];
 		require(msg.sender == tempAddress);
 		require(_participatesBook[tempAddress]);
@@ -412,5 +427,6 @@ contract MetaCoin {
 
 		_participatesBook[tempAddress] = false;
 		tempAddress.transfer(particiapteBalances);
+		_allBalances -= particiapteBalances;
 	}
 }

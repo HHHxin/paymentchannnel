@@ -148,7 +148,7 @@ function verifySignature4(account,rawValue, v,r,s) {
 
 function signRawMessage5(rawValue, privateKey) {
     const encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
-        ['uint256', 'uint256', 'bytes32', 'bytes32', 'bytes32', 'uint256'], rawValue,
+        ['uint256', 'uint256', 'bytes32', 'bytes32', 'bytes32', 'bytes32', 'uint256'], rawValue,
     ).slice(2));
 
     return offchainSign(encodedMsg, privateKey);

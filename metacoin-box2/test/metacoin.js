@@ -63,7 +63,8 @@ contract('MetaCoin', (accounts) => {
   it('should call a function (candidateFund)', async () => {
     const metaCoinInstance = await MetaCoin.deployed();
     for(let i = 0; i<candidatesLength; i++){
-      await metaCoinInstance.candidateFund({from: accounts[i], value: C[i]});
+      let tx = await metaCoinInstance.candidateFund({from: accounts[i], value: C[i]});
+      console.log(`candidateFund ${i} gas消耗:${tx.receipt.gasUsed}`);
     }
     for(let i = 0; i<candidatesLength; i++){
       assert.equal(await metaCoinInstance._collateralOfValidator(await metaCoinInstance._validators(i)), C[i], '资金存入异常1');
@@ -75,25 +76,14 @@ contract('MetaCoin', (accounts) => {
 
   });
 
-
   it('should call a function (participateFund)', async () => {
     const metaCoinInstance = await MetaCoin.deployed();
     for(let i = 0; i<paticipatesLength ; i++){
-      await metaCoinInstance.participatesFund({from: accounts[i+candidatesLength], value: C[i]});
+      let tx = await metaCoinInstance.participatesFund({from: accounts[i+candidatesLength], value: C[i]});
+      console.log(`participate ${i} gas消耗：${tx.receipt.gasUsed}`);
     }
     
     assert.equal(await metaCoinInstance._allBalances(), 2000, '资金存入异常2');
-  });
-
-
-  it('test select leader', async () => {
-    const metaCoinInstance = await MetaCoin.deployed();
-
-    const tx = await metaCoinInstance.selectLeader();
-    const gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
-    const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
-    console.log(`选举消耗：${gasTestCost(gasUsed,gasPrice)}`);
-
   });
 
   it('should call a function (validPayment)', async () => {
@@ -170,6 +160,7 @@ contract('MetaCoin', (accounts) => {
     let gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
     let gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
     console.log(`TxFraudProof gas:${gasTestCost(gasUsed,gasPrice)}`);
+    console.log(`txFraudProof gas 消耗：${gasUsed}`);
 
     console.log("leaderIndex: "+await metaCoinInstance._leaderIndex());
 
@@ -265,32 +256,56 @@ contract('MetaCoin', (accounts) => {
     console.log(`StateFraudProof gas:${gasUsed}`);
     // stateFraudProof 测试 ending.........
 
+    // 生成withdrawRoot
+    let leaveslist10 = [];
+    for(let i = 1; i < 4; i++){
+      let encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'uint256'],
+        [accounts[candidatesLength+i], 200]
+      ).slice(2))
+      leaveslist10.push('0x' + Buffer.from(encodedMsg, 'latin1').toString('hex'))
+    }
+    const leaves10 = leaveslist10.map(v => keccak256(v));
+    const tree10 = new MerkleTree(leaves10, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const withdrawRoot = tree10.getHexRoot();
+    const preleaf10 = hexToBytes(web3.eth.abi.encodeParameters(
+      ['address', 'uint256'],
+      [accounts[candidatesLength+2], 200]
+    ).slice(2));
+    const leaf10 = keccak256('0x' + Buffer.from(preleaf10, 'latin1').toString('hex'));
+    const proof10 = tree10.getHexProof(leaf10);
+
     // 测试validCheckPoint
-    let checkpoint = {leaderId:0, epoch:1, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, totalFee:10};
-    let sig = signRawMessage5([checkpoint.leaderId, checkpoint.epoch, checkpoint.stateRoot, checkpoint.paymentRoot, checkpoint.intervalStateRoot, checkpoint.totalFee], PrivateKeys[0]);
+    let checkpoint = {leaderId:0, epoch:1, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, withdrawRoot:withdrawRoot, totalFee:10};
+    let sig = signRawMessage5([checkpoint.leaderId, checkpoint.epoch, checkpoint.stateRoot, checkpoint.paymentRoot, checkpoint.intervalStateRoot, checkpoint.withdrawRoot, checkpoint.totalFee], PrivateKeys[0]);
     assert.equal(await metaCoinInstance.validCheckPoint.call(checkpoint, sig, 0), true, 'checkpoint签名无效');
 
     tempSigArr = []
     for(let i = 0; i < 14; i++){
-      tempSigArr[i] = signRawMessage5([checkpoint.leaderId, checkpoint.epoch, checkpoint.stateRoot, checkpoint.paymentRoot, checkpoint.intervalStateRoot, checkpoint.totalFee], PrivateKeys[i]);
+      tempSigArr[i] = signRawMessage5([checkpoint.leaderId, checkpoint.epoch, checkpoint.stateRoot, checkpoint.paymentRoot, checkpoint.intervalStateRoot, checkpoint.withdrawRoot, checkpoint.totalFee], PrivateKeys[i]);
     }
     // update checkPoint
     assert.equal(await metaCoinInstance.updateCheckPoint.call(checkpoint, tempSigArr, [0,1,2,3,4,5,6,7,8,9,10,11,12,13], {from:accounts[await metaCoinInstance._leaderIndex()]}), true, 'updateCheckPoint成功');
+    let updateTx = await metaCoinInstance.updateCheckPoint(checkpoint, tempSigArr, [0,1,2,3,4,5,6,7,8,9,10,11,12,13], {from:accounts[await metaCoinInstance._leaderIndex()]})
+    console.log(`updateCheckpoint gas 消耗：${updateTx.receipt.gasUsed}`);
 
     // test challenge
-    let checkpoint1 = {leaderId:0, epoch:2, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, totalFee:10};
+    let checkpoint1 = {leaderId:0, epoch:2, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, withdrawRoot:withdrawRoot, totalFee:10};
     await metaCoinInstance.initChallenge(checkpoint1);
     
 
     tempSigArr1 = []
     for(let i = 0; i < 10; i++){
-      tempSigArr1[i] = signRawMessage5([checkpoint1.leaderId, checkpoint1.epoch, checkpoint1.stateRoot, checkpoint1.paymentRoot, checkpoint1.intervalStateRoot, checkpoint1.totalFee], PrivateKeys[i]);
+      tempSigArr1[i] = signRawMessage5([checkpoint1.leaderId, checkpoint1.epoch, checkpoint1.stateRoot, checkpoint1.paymentRoot, checkpoint1.intervalStateRoot, checkpoint1.withdrawRoot,checkpoint1.totalFee], PrivateKeys[i]);
     }
-    await metaCoinInstance.leaderPessimisticUpdate(tempSigArr1, [0,1,2,3,4,5,6,7,8,9]);
+    let leaderPessimisticUpTx = await metaCoinInstance.leaderPessimisticUpdate(tempSigArr1, [0,1,2,3,4,5,6,7,8,9]);
+    console.log(`leaderPessimisticUpTx gas 消耗:${leaderPessimisticUpTx.receipt.gasUsed}`);
 
     console.log('countBook: '+await metaCoinInstance.countVoteBook.call());
 
-    await metaCoinInstance.pessimisticVote(10);
+    let pessimisticVoteTx = await metaCoinInstance.pessimisticVote(10);
+    console.log(`pessimisticVoteTx gas消耗：${pessimisticVoteTx.receipt.gasUsed}`);
+
     await metaCoinInstance.pessimisticVote(11);
     await metaCoinInstance.pessimisticVote(12);
     // await metaCoinInstance.timeoutChallenge({from:accounts[5]});
@@ -302,14 +317,52 @@ contract('MetaCoin', (accounts) => {
     }
 
     // stateFraud 测试
-    let challengeCheckpoint = {leaderId:0, epoch:3, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, totalFee:10};
+    let challengeCheckpoint = {leaderId:0, epoch:3, stateRoot:stateroot2, paymentRoot:paymentRoot, intervalStateRoot:stateroot3, withdrawRoot:withdrawRoot, totalFee:10};
     challengeSigArr1 = []
     for(let i = 0; i < 4; i++){
-      challengeSigArr1[i] = signRawMessage5([challengeCheckpoint.leaderId, challengeCheckpoint.epoch, challengeCheckpoint.stateRoot, challengeCheckpoint.paymentRoot, challengeCheckpoint.intervalStateRoot, challengeCheckpoint.totalFee], PrivateKeys[i]);
+      challengeSigArr1[i] = signRawMessage5([challengeCheckpoint.leaderId, challengeCheckpoint.epoch, challengeCheckpoint.stateRoot, challengeCheckpoint.paymentRoot, challengeCheckpoint.intervalStateRoot, challengeCheckpoint.withdrawRoot, challengeCheckpoint.totalFee], PrivateKeys[i]);
     }
     await metaCoinInstance.StateFraud(challengeCheckpoint, challengeSigArr1, [0,1,2,3], stateProof);
 
   });
 
+  it('withdrawBalance 测试', async() => {
+    const metaCoinInstance = await MetaCoin.deployed();
+
+    let leaveslist10 = [];
+    for(let i = 1; i < 4; i++){
+      let encodedMsg = hexToBytes(web3.eth.abi.encodeParameters(
+        ['address', 'uint256'],
+        [accounts[candidatesLength+i], 200]
+      ).slice(2))
+      leaveslist10.push('0x' + Buffer.from(encodedMsg, 'latin1').toString('hex'))
+    }
+    const leaves10 = leaveslist10.map(v => keccak256(v));
+    const tree10 = new MerkleTree(leaves10, keccak256, { sortPairs: true, sortLeaves: false, sort: false });
+    const withdrawRoot = tree10.getHexRoot();
+    const preleaf10 = hexToBytes(web3.eth.abi.encodeParameters(
+      ['address', 'uint256'],
+      [accounts[candidatesLength+2], 200]
+    ).slice(2));
+    const leaf10 = keccak256('0x' + Buffer.from(preleaf10, 'latin1').toString('hex'));
+    const proof10 = tree10.getHexProof(leaf10);
+
+    const tx = await metaCoinInstance.withdrawBalances(2, 200, proof10, {from: accounts[candidatesLength+2]});
+    const gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    console.log(`withdrawBalances消耗gas：${gasUsed}`);
+    console.log(`withdrawBalances消耗：${gasTestCost(gasUsed,gasPrice)}`);
+  });
+
+  it('test select leader', async () => {
+    const metaCoinInstance = await MetaCoin.deployed();
+
+    const tx = await metaCoinInstance.selectLeader();
+    const gasPrice = web3.utils.toBN(await web3.eth.getGasPrice());
+    const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+    console.log(`选举消耗gas：${gasUsed}`);
+    console.log(`选举消耗：${gasTestCost(gasUsed,gasPrice)}`);
+
+  });
 
 });
